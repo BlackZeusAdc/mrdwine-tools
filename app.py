@@ -210,41 +210,52 @@ def normalizar_region(texto):
         if key in texto_lower: return val
     return str(texto).title()
 
-def generar_seo_title(anio, nombrebase, region, score):
-    """Genera el Title Tag optimizado para longitud. Max 60 chars.
-    Prioridad: Año > Nombre > Score > Region > CTA"""
+def generar_seo_title(anio, nombrebase, region, score, es_unico=False):
+    """
+    Genera el Title Tag optimizado para longitud. Max 60 chars.
+    Prioridad: Año (solo si es único) → Nombre → Region → CTA (SIN PUNTAJE)
+    Formato: Title Case (Cada Palabra Con Mayúscula)
+    IDIOMA: INGLÉS
     
+    Args:
+        anio: Año del vino
+        nombrebase: Nombre base del vino
+        region: Región
+        score: Puntaje (NO SE USA en v8.9)
+        es_unico: True si es un vino único (sin variantes), False si tiene múltiples añadas
+    """
     nombre_limpio = nombrebase.title()
-    anio_str = str(anio) if anio and str(anio).upper() != 'NV' else ''
     
-    # Construcción Base (Lo intocable: "2020 Caymus Cabernet")
-    base_title = f"{anio_str} {nombre_limpio}".strip()
+    # OPTIMIZACIÓN: Solo incluir año si es producto único (sin variantes)
+    if es_unico:
+        anio_str = str(anio) if anio and str(anio).upper() != "NV" else ""
+    else:
+        anio_str = ""  # NO mostrar año en productos con variantes
     
-    # Componentes Opcionales (En orden de importancia)
+    # Construcción Base
+    if anio_str:
+        base_title = f"{anio_str} {nombre_limpio}".strip()
+    else:
+        base_title = nombre_limpio.strip()
+    
+    # Componentes Opcionales (En orden de importancia, SIN SCORE)
     components = []
     
-    # 1. Score (Muy importante si es alto)
-    if score and score >= 90:
-        components.append(f"{score} Pts")
-    
-    # 2. Region (Si la región es muy larga, intentar abreviarla o omitirla si no cabe)
+    # 1. Region (Title Case también)
     if region:
-        components.append(f"{region}")
+        components.append(f"{region.title()}")
     
-    # 3. CTA (Relleno si sobra espacio)
-    if score and score >= 90:
-        components.append("Buy Online")
-    else:
-        components.append("Best Price")
+    # 2. CTA (INGLÉS: "Best Price")
+    components.append("Best Price")
     
     # Construcción Iterativa: Adding parts until limit
     final_title = base_title
     for comp in components:
         test_title = f"{final_title} {comp}"
-        if len(test_title) <= 60:  # Probamos agregar el componente
+        if len(test_title) <= 60:
             final_title = test_title
         else:
-            continue  # Si es el Score y no cabe, es raro (son pocos chars), pero priorizamos nombre.
+            continue
     
     # Fallback: Si aun la base es >60, cortar nombre inteligentemente
     if len(final_title) > 60:
@@ -253,24 +264,43 @@ def generar_seo_title(anio, nombrebase, region, score):
         if last_space != -1:
             final_title = final_title[:last_space]
     
-    return final_title
+    return final_title.title()
+
+
 
 def generar_meta_description(row, titulo_limpio, region, varietal, score):
-    try: precio = float(row.get('Variant Price', 0))
-    except: precio = 0
-    pairing = PAIRING_DICT.get(varietal, 'gourmet meals')
-    score_txt = f"{score} Pts. " if score else ""
+    """
+    Genera la Meta Description optimizada.
+    Formato: Sentence case (Solo primera letra en mayúscula)
+    IDIOMA: INGLÉS
+    """
+    try:
+        precio = float(row.get('Variant Price', 0))
+    except:
+        precio = 0
     
-    if precio >= 100 or (score and score >= 94): 
-        desc = f"Buy {titulo_limpio}. A prestigious {varietal.title()} from {region}. {score_txt}Perfect for cellaring. Secure your bottle at Mr D Wine."
+    pairing = PAIRING_DICT.get(varietal, "gourmet meals")
+    score_txt = f"{score} pts. " if score else ""
+    
+    # TEMPLATES EN INGLÉS
+    if precio > 100 or (score and score >= 94):
+        desc = f"Buy {titulo_limpio}. A prestigious {varietal.lower()} from {region}. {score_txt}Perfect for cellaring. Secure your bottle at Mr D Wine."
     else:
-        desc = f"Shop {titulo_limpio}. A versatile {varietal.title()} from {region}, ideal for {pairing}. {score_txt}Best price & fast shipping."
+        desc = f"Shop {titulo_limpio}. A versatile {varietal.lower()} from {region}, ideal for pairing. {score_txt}Best price & fast shipping."
     
+    # Cortar a 155 caracteres si es necesario
     if len(desc) > 155:
         desc = desc[:155]
         last_space = desc.rfind(' ')
-        if last_space != -1: desc = desc[:last_space] + "."
+        if last_space != -1:
+            desc = desc[:last_space] + "."
+    
+    # GARANTIZAR SENTENCE CASE: Solo primera letra en mayúscula
+    # Pero mantener "Mr D Wine" con mayúsculas correctas
+    desc = desc[0].upper() + desc[1:]
+    
     return desc
+
 
 # --- MOTOR DE LIMPIEZA ---
 def extraer_anio(texto):
@@ -431,6 +461,7 @@ def procesar_agrupacion_inteligente(df):
             region = normalizar_region(tags)
         
         es_primera_variante = True
+        es_producto_unico = (len(group) == 1)
         
         for idx, row in group.iterrows():
             fila = {col: '' for col in COLUMNAS_SALIDA_EXACTAS}
@@ -460,6 +491,9 @@ def procesar_agrupacion_inteligente(df):
                 fila['Varietal'] = varietal
                 
                 anio_seo = row['__anio_detectado']
+                
+                 
+                
                 seo_title = generar_seo_title(anio_seo, titulo_padre, region, score)
                 
                 if seo_title in seo_titles_generados:
