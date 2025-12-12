@@ -391,6 +391,7 @@ def procesar_agrupacion_inteligente(df):
         es_primera_variante = True
         
         for idx, row in group.iterrows():
+            total_variantes += 1
             fila = {col: '' for col in COLUMNAS_SALIDA_EXACTAS}
             fila['Handle'] = handle
             if 'Variant ID' in row: fila['Variant ID'] = row['Variant ID']
@@ -426,8 +427,6 @@ def procesar_agrupacion_inteligente(df):
                 fila['SEO Description'] = generar_meta_description(row, titulo_padre, region, varietal, score)
                 
                 es_primera_variante = False
-                            else:
-                                                total_variantes += 1
             
             anio = row['__anio_detectado']
             fila['Option1 Name'] = 'Vintage'
@@ -574,5 +573,4 @@ def main_app():
                 else: st.info("Sin redirecciones.")
 
 if __name__ == "__main__":
-
     if check_login(): main_app()
