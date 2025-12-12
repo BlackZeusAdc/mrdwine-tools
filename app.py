@@ -210,14 +210,50 @@ def normalizar_region(texto):
         if key in texto_lower: return val
     return str(texto).title()
 
-def generar_seo_title(anio, nombre_base, region, score):
-    nombre_limpio = nombre_base.title()
-    if not anio or str(anio).upper() == "NV":
-        return f"{nombre_limpio} | Limited Availability | MR D WINE"
+def generar_seo_title(anio, nombrebase, region, score):
+    """Genera el Title Tag optimizado para longitud. Max 60 chars.
+    Prioridad: Año > Nombre > Score > Region > CTA"""
+    
+    nombre_limpio = nombrebase.title()
+    anio_str = str(anio) if anio and str(anio).upper() != 'NV' else ''
+    
+    # Construcción Base (Lo intocable: "2020 Caymus Cabernet")
+    base_title = f"{anio_str} {nombre_limpio}".strip()
+    
+    # Componentes Opcionales (En orden de importancia)
+    components = []
+    
+    # 1. Score (Muy importante si es alto)
     if score and score >= 90:
-        return f"{anio} {nombre_limpio} | {score} Pts | Buy Online"
+        components.append(f"{score} Pts")
+    
+    # 2. Region (Si la región es muy larga, intentar abreviarla o omitirla si no cabe)
+    if region:
+        components.append(f"{region}")
+    
+    # 3. CTA (Relleno si sobra espacio)
+    if score and score >= 90:
+        components.append("Buy Online")
     else:
-        return f"Buy {anio} {nombre_limpio} | Best Price & Fast Shipping"
+        components.append("Best Price")
+    
+    # Construcción Iterativa: Adding parts until limit
+    final_title = base_title
+    for comp in components:
+        test_title = f"{final_title} {comp}"
+        if len(test_title) <= 60:  # Probamos agregar el componente
+            final_title = test_title
+        else:
+            continue  # Si es el Score y no cabe, es raro (son pocos chars), pero priorizamos nombre.
+    
+    # Fallback: Si aun la base es >60, cortar nombre inteligentemente
+    if len(final_title) > 60:
+        final_title = final_title[:60]
+        last_space = final_title.rfind(' ')
+        if last_space != -1:
+            final_title = final_title[:last_space]
+    
+    return final_title
 
 def generar_meta_description(row, titulo_limpio, region, varietal, score):
     try: precio = float(row.get('Variant Price', 0))
@@ -349,25 +385,26 @@ def generar_sabana_actualizacion(df):
 def procesar_agrupacion_inteligente(df):
     log = []
     lista_redirecciones = []
-    df = normalizar_headers_vendor(df)
     
-    if 'Title' not in df.columns: return None, ["❌ Error: Falta 'Title'."], [], 0
-
+    df = normalizar_headers_vendor(df)
+    if 'Title' not in df.columns:
+        return None, "❌ Error: Falta 'Title'.", [], 0
+    
     df['__anio_detectado'] = df['Title'].apply(extraer_anio)
     df['__nombre_base'] = df['Title'].apply(normalizar_nombre_base)
     
     if 'Vendor' in df.columns:
         df['__vendor_norm'] = df['Vendor'].astype(str).str.lower().str.strip()
-        df['__vendor_norm'] = df['__vendor_norm'].apply(lambda x: re.sub(r'\s*\(.*?\)', '', x))
+        df['__vendor_norm'] = df['__vendor_norm'].apply(lambda x: re.sub(r'\.', '', x))
     else:
         df['__vendor_norm'] = 'generico'
-
+    
     df['__group_key'] = df['__vendor_norm'] + "_" + df['__nombre_base']
-    df['__handle_canonico'] = df.apply(lambda x: limpiar_texto_handle(f"{x['__nombre_base']}"), axis=1) 
+    df['__handle_canonico'] = df.apply(lambda x: limpiar_texto_handle(f"{x['__nombre_base']}"), axis=1)
     
     rows_finales = []
     redirecciones_procesadas = set()
-    seo_titles_generados = [] 
+    seo_titles_generados = []
     
     grupos = df.groupby('__group_key')
     clusters_encontrados = 0
@@ -375,35 +412,41 @@ def procesar_agrupacion_inteligente(df):
     
     for name, group in grupos:
         group = group.sort_values(by='__anio_detectado', ascending=False)
+        
+        # CORRECCIÓN: Contar clusters y variantes correctamente
+        if len(group) > 1:
+            clusters_encontrados += 1
+            total_variantes += (len(group) - 1)  # Solo las hijas, no el padre
+        
         padre = group.iloc[0]
         handle = padre['__handle_canonico']
         titulo_padre = padre['__nombre_base'].title()
-        
         html_body = str(padre.get('Body (HTML)', ''))
         score = extraer_score_del_html(html_body)
-        varietal = detectar_varietal(titulo_padre + " " + html_body)
-        
+        varietal = detectar_varietal(titulo_padre + html_body)
         region = "Region"
+        
         if 'Tags' in padre and pd.notna(padre['Tags']):
             tags = str(padre['Tags'])
-            region = normalizar_region(tags) 
+            region = normalizar_region(tags)
         
         es_primera_variante = True
         
         for idx, row in group.iterrows():
-            total_variantes += 1
             fila = {col: '' for col in COLUMNAS_SALIDA_EXACTAS}
             fila['Handle'] = handle
-            if 'Variant ID' in row: fila['Variant ID'] = row['Variant ID']
-
+            
+            if 'Variant ID' in row:
+                fila['Variant ID'] = row['Variant ID']
+            
             h_orig = str(row.get('Handle', ''))
             if h_orig and h_orig != handle:
-                 path_from = f"/products/{h_orig}"
-                 path_to = f"/products/{handle}"
-                 if path_from not in redirecciones_procesadas:
-                     lista_redirecciones.append({'Redirect from': path_from, 'Redirect to': path_to})
-                     redirecciones_procesadas.add(path_from)
-
+                path_from = f"/products/{h_orig}"
+                path_to = f"/products/{handle}"
+                if path_from not in redirecciones_procesadas:
+                    lista_redirecciones.append({'Redirect from': path_from, 'Redirect to': path_to})
+                    redirecciones_procesadas.add(path_from)
+            
             if es_primera_variante:
                 fila['Title'] = titulo_padre
                 fila['Body (HTML)'] = row.get('Body (HTML)', '')
@@ -420,7 +463,7 @@ def procesar_agrupacion_inteligente(df):
                 seo_title = generar_seo_title(anio_seo, titulo_padre, region, score)
                 
                 if seo_title in seo_titles_generados:
-                    log.append(f"🚨 ALERTA ROJA: SEO Title Duplicado: '{seo_title}'. Revisa handle: {handle}")
+                    log.append(f"⚠ ALERTA ROJA: SEO Title Duplicado: '{seo_title}'. Revisa handle: {handle}")
                 seo_titles_generados.append(seo_title)
                 
                 fila['SEO Title'] = seo_title[:60]
@@ -432,44 +475,33 @@ def procesar_agrupacion_inteligente(df):
             fila['Option1 Name'] = 'Vintage'
             fila['Option1 Value'] = anio
             
-            # --- NUEVA LÓGICA DE TAMAÑO Y PESO (CRÍTICA) ---
-            # 1. Obtener Size (Option2) desde Metafields o columna directa
-            size_val = str(row.get('Size (product.metafields.pundit.format_size)', ''))
+            size_val = str(row.get("Size (product.metafields.pundit.formatsize)", ''))
             if not size_val or size_val.lower() == 'nan':
-                 size_val = str(row.get('Presentation (product.metafields.pundit.format)', ''))
+                size_val = str(row.get("Presentation (product.metafields.pundit.format)", ''))
             if not size_val or size_val.lower() == 'nan':
-                 size_val = str(row.get('Option2 Value', '')) 
-            
-            # Si sigue vacío, usar default
+                size_val = str(row.get('Option2 Value', ''))
             if not size_val or size_val.lower() == 'nan':
                 size_val = '750ml'
-
+            
             fila['Option2 Name'] = 'Size'
             fila['Option2 Value'] = size_val
             
-            # 2. Calcular Gramos
-            grams = SIZE_TO_GRAMS.get(size_val, 1360) # Default 750ml (1360g)
+            grams = SIZE_TO_GRAMS.get(size_val, 1360)
             fila['Variant Grams'] = grams
             
-            # 3. Calcular Peso en Libras
             weight_lb = round(grams / 453.592, 2)
             fila['Variant Weight'] = weight_lb
             fila['Variant Weight Unit'] = 'lb'
-
-            cols_variantes = [
-                'Variant SKU', 'Variant Price', 'Variant Inventory Qty', 
-                'Image Src', 'Image Alt Text', 'Variant Image',
-                'Cost per item', 'Variant Compare At Price'
-            ]
+            
+            cols_variantes = ['Variant SKU', 'Variant Price', 'Variant Inventory Qty', 
+                            'Image Src', 'Image Alt Text', 'Variant Image', 
+                            'Cost per item', 'Variant Compare At Price']
             for c in cols_variantes:
                 fila[c] = row.get(c, '')
-                
+            
             fila['Variant Inventory Tracker'] = 'shopify'
-            
             rows_finales.append(fila)
-            
-        if len(group) > 1: clusters_encontrados += 1
-
+    
     df_final = pd.DataFrame(rows_finales)
     df_final = df_final[COLUMNAS_SALIDA_EXACTAS]
     
