@@ -212,25 +212,17 @@ def normalizar_region(texto):
 
 def generar_seo_title(anio, nombrebase, region, score, es_unico=False):
     """
-    Genera el Title Tag optimizado para longitud. Max 60 chars.
-    Prioridad: Año (solo si es único) → Nombre → Region → CTA (SIN PUNTAJE)
-    Formato: Title Case (Cada Palabra Con Mayúscula)
-    IDIOMA: INGLÉS
-    
-    Args:
-        anio: Año del vino
-        nombrebase: Nombre base del vino
-        region: Región
-        score: Puntaje (NO SE USA en v8.9)
-        es_unico: True si es un vino único (sin variantes), False si tiene múltiples añadas
+    Genera el Title Tag optimizado.
+    Regla: El Año SOLO se muestra si el producto TIENE variantes.
     """
-    nombre_limpio = nombrebase.title()
+    nombre_limpio = nombrebase.strip()
     
-    # OPTIMIZACIÓN: Solo incluir año si es producto único (sin variantes)
+    # --- LÓGICA CORREGIDA Y SIMPLIFICADA ---
     if es_unico:
         anio_str = str(anio) if anio and str(anio).upper() != "NV" else ""
     else:
         anio_str = ""  # NO mostrar año en productos con variantes
+    
     
     # Construcción Base
     if anio_str:
@@ -238,17 +230,13 @@ def generar_seo_title(anio, nombrebase, region, score, es_unico=False):
     else:
         base_title = nombre_limpio.strip()
     
-    # Componentes Opcionales (En orden de importancia, SIN SCORE)
+    # Componentes Opcionales
     components = []
-    
-    # 1. Region (Title Case también)
     if region:
-        components.append(f"{region.title()}")
+        components.append(str(region))
+    components.append("Best price")
     
-    # 2. CTA (INGLÉS: "Best Price")
-    components.append("Best Price")
-    
-    # Construcción Iterativa: Adding parts until limit
+    # Límite de 60 caracteres
     final_title = base_title
     for comp in components:
         test_title = f"{final_title} {comp}"
@@ -256,51 +244,74 @@ def generar_seo_title(anio, nombrebase, region, score, es_unico=False):
             final_title = test_title
         else:
             continue
-    
-    # Fallback: Si aun la base es >60, cortar nombre inteligentemente
+            
     if len(final_title) > 60:
         final_title = final_title[:60]
         last_space = final_title.rfind(' ')
         if last_space != -1:
             final_title = final_title[:last_space]
     
-    return final_title.title()
-
+    # Formato Minúscula (Sentence case)
+    return final_title.capitalize()
 
 
 def generar_meta_description(row, titulo_limpio, region, varietal, score):
     """
-    Genera la Meta Description optimizada.
-    Formato: Sentence case (Solo primera letra en mayúscula)
-    IDIOMA: INGLÉS
+    Genera Meta Description (Máx ~155 chars estándar SEO).
+    Estrategia: Construcción por oraciones completas para evitar cortes bruscos.
+    Formato: Sentence case (Solo primera letra mayúscula).
     """
-    try:
-        precio = float(row.get('Variant Price', 0))
-    except:
-        precio = 0
+    # 1. Limpieza preventiva de datos (evita que salgan listas de tags sucias)
+    titulo = str(titulo_limpio).strip()
     
-    pairing = PAIRING_DICT.get(varietal, "gourmet meals")
-    score_txt = f"{score} pts. " if score else ""
+    # Limpiamos region y varietal para que no sean listas largas separadas por comas
+    # Si viene "Mendoza, Argentina, Valle de Uco", nos quedamos solo con lo primero antes de la coma para que sea corto y natural.
+    region_corta = str(region).split(',')[0].strip() if region else "best regions"
+    varietal_corto = str(varietal).split(',')[0].strip() if varietal else "fine wine"
     
-    # TEMPLATES EN INGLÉS
-    if precio > 100 or (score and score >= 94):
-        desc = f"Buy {titulo_limpio}. A prestigious {varietal.lower()} from {region}. {score_txt}Perfect for cellaring. Secure your bottle at Mr D Wine."
-    else:
-        desc = f"Shop {titulo_limpio}. A versatile {varietal.lower()} from {region}, ideal for pairing. {score_txt}Best price & fast shipping."
+    try: precio = float(row.get('Variant Price', 0))
+    except: precio = 0
     
-    # Cortar a 155 caracteres si es necesario
-    if len(desc) > 155:
-        desc = desc[:155]
-        last_space = desc.rfind(' ')
-        if last_space != -1:
-            desc = desc[:last_space] + "."
-    
-    # GARANTIZAR SENTENCE CASE: Solo primera letra en mayúscula
-    # Pero mantener "Mr D Wine" con mayúsculas correctas
-    desc = desc[0].upper() + desc[1:]
-    
-    return desc
+    score_txt = f"Rated {score} pts." if score else ""
 
+    # 2. Definimos bloques de texto por prioridad (Pesos)
+    # Bloque A: La acción principal (Vital)
+    block_a = f"Shop {titulo}."
+    
+    # Bloque B: Contexto (Región y Tipo) - Le da naturalidad
+    # Ej: "A prestigious Malbec from Mendoza."
+    block_b = f"A prestigious {varietal_corto} from {region_corta}."
+    
+    # Bloque C: Gancho de venta (Cierre)
+    if precio > 0 and precio < 50:
+        block_c = "Best price & fast shipping at Mr D Wine."
+    else:
+        block_c = f"{score_txt} Secure your bottle at Mr D Wine."
+
+    # 3. Ensamblaje inteligente (Evita cortes bruscos)
+    # Límite SEO estándar: 155 caracteres (60 es muy poco para description, es para titles)
+    LIMIT = 155 
+    
+    description = block_a
+    
+    # Intentamos agregar Bloque B (Descripción)
+    if len(description) + len(block_b) + 1 <= LIMIT:
+        description += " " + block_b
+        
+    # Intentamos agregar Bloque C (Cierre)
+    # Limpiamos block_c de espacios extra o puntuación flotante antes de medir
+    block_c = block_c.strip().strip(',').strip()
+    
+    if len(description) + len(block_c) + 1 <= LIMIT:
+        description += " " + block_c
+
+    # 4. Formato final
+    # Aseguramos que termine en punto si no lo tiene
+    if not description.endswith('.'):
+        description += "."
+        
+    # Aplicamos Sentence case (Solo primera letra mayúscula)
+    return description.capitalize()
 
 # --- MOTOR DE LIMPIEZA ---
 def extraer_anio(texto):
@@ -529,7 +540,7 @@ def procesar_agrupacion_inteligente(df):
             
             cols_variantes = ['Variant SKU', 'Variant Price', 'Variant Inventory Qty', 
                             'Image Src', 'Image Alt Text', 'Variant Image', 
-                            'Cost per item', 'Variant Compare At Price']
+                            'Cost per item', 'Variant Compare At Price', 'Variant Barcode']
             for c in cols_variantes:
                 fila[c] = row.get(c, '')
             
