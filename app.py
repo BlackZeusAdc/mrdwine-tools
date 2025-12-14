@@ -255,6 +255,7 @@ def generar_seo_title(anio, nombrebase, region, score, es_unico=False):
     return final_title.capitalize()
 
 
+
 def generar_meta_description(row, titulo_limpio, region, varietal, score):
     """
     Genera Meta Description (Máx ~155 chars estándar SEO).
@@ -427,10 +428,17 @@ def procesar_agrupacion_inteligente(df):
     log = []
     lista_redirecciones = []
     
+    # 1. Normalización básica
     df = normalizar_headers_vendor(df)
-    if 'Title' not in df.columns:
-        return None, "❌ Error: Falta 'Title'.", [], 0
     
+    # Corrección para el archivo de Signature si usa 'Description' en vez de 'Title'
+    if 'Title' not in df.columns:
+        if 'Description' in df.columns:
+            df = df.rename(columns={'Description': 'Title'})
+        else:
+            return None, "❌ Error: Falta columna 'Title' (o 'Description').", [], 0
+    
+    # Pre-cálculos
     df['__anio_detectado'] = df['Title'].apply(extraer_anio)
     df['__nombre_base'] = df['Title'].apply(normalizar_nombre_base)
     
@@ -444,8 +452,6 @@ def procesar_agrupacion_inteligente(df):
     df['__handle_canonico'] = df.apply(lambda x: limpiar_texto_handle(f"{x['__nombre_base']}"), axis=1)
     
     rows_finales = []
-    redirecciones_procesadas = set()
-    seo_titles_generados = []
     
     grupos = df.groupby('__group_key')
     clusters_encontrados = 0
@@ -453,11 +459,11 @@ def procesar_agrupacion_inteligente(df):
     
     for name, group in grupos:
         group = group.sort_values(by='__anio_detectado', ascending=False)
+        es_producto_unico = (len(group) == 1)
         
-        # CORRECCIÓN: Contar clusters y variantes correctamente
-        if len(group) > 1:
+        if not es_producto_unico:
             clusters_encontrados += 1
-            total_variantes += (len(group) - 1)  # Solo las hijas, no el padre
+            total_variantes += (len(group) - 1)
         
         padre = group.iloc[0]
         handle = padre['__handle_canonico']
@@ -465,30 +471,20 @@ def procesar_agrupacion_inteligente(df):
         html_body = str(padre.get('Body (HTML)', ''))
         score = extraer_score_del_html(html_body)
         varietal = detectar_varietal(titulo_padre + html_body)
-        region = "Region"
         
+        region = "Region"
         if 'Tags' in padre and pd.notna(padre['Tags']):
-            tags = str(padre['Tags'])
-            region = normalizar_region(tags)
+            region = normalizar_region(str(padre['Tags']))
+        if region == "Region" and 'Appellation' in padre:
+             region = normalizar_region(str(padre['Appellation']))
         
         es_primera_variante = True
-        es_producto_unico = (len(group) == 1)
         
         for idx, row in group.iterrows():
             fila = {col: '' for col in COLUMNAS_SALIDA_EXACTAS}
             fila['Handle'] = handle
             
-            if 'Variant ID' in row:
-                fila['Variant ID'] = row['Variant ID']
-            
-            h_orig = str(row.get('Handle', ''))
-            if h_orig and h_orig != handle:
-                path_from = f"/products/{h_orig}"
-                path_to = f"/products/{handle}"
-                if path_from not in redirecciones_procesadas:
-                    lista_redirecciones.append({'Redirect from': path_from, 'Redirect to': path_to})
-                    redirecciones_procesadas.add(path_from)
-            
+            # --- PADRE (Datos Principales SEO y Títulos) ---
             if es_primera_variante:
                 fila['Title'] = titulo_padre
                 fila['Body (HTML)'] = row.get('Body (HTML)', '')
@@ -502,47 +498,73 @@ def procesar_agrupacion_inteligente(df):
                 fila['Varietal'] = varietal
                 
                 anio_seo = row['__anio_detectado']
-                
-                 
-                
-                seo_title = generar_seo_title(anio_seo, titulo_padre, region, score)
-                
-                if seo_title in seo_titles_generados:
-                    log.append(f"⚠ ALERTA ROJA: SEO Title Duplicado: '{seo_title}'. Revisa handle: {handle}")
-                seo_titles_generados.append(seo_title)
-                
-                fila['SEO Title'] = seo_title[:60]
+                seo_title = generar_seo_title(anio_seo, titulo_padre, region, score, es_unico=es_producto_unico)
+                fila['SEO Title'] = seo_title
                 fila['SEO Description'] = generar_meta_description(row, titulo_padre, region, varietal, score)
                 
                 es_primera_variante = False
             
+            # --- VARIANTE (Datos Técnicos) ---
+            if 'Variant ID' in row: fila['Variant ID'] = row['Variant ID']
+            
+            # Option 1: Vintage
             anio = row['__anio_detectado']
             fila['Option1 Name'] = 'Vintage'
             fila['Option1 Value'] = anio
             
-            size_val = str(row.get("Size (product.metafields.pundit.formatsize)", ''))
-            if not size_val or size_val.lower() == 'nan':
-                size_val = str(row.get("Presentation (product.metafields.pundit.format)", ''))
-            if not size_val or size_val.lower() == 'nan':
-                size_val = str(row.get('Option2 Value', ''))
-            if not size_val or size_val.lower() == 'nan':
-                size_val = '750ml'
+            # --- LÓGICA DE OPCIÓN 2 (MAPEO EXACTO) ---
             
-            fila['Option2 Name'] = 'Size'
-            fila['Option2 Value'] = size_val
+            # 1. Option2 Name <- Presentation (product.metafields.pundit.format)
+            # Buscamos la columna exacta que indicaste
+            opt2_name = str(row.get('Presentation (product.metafields.pundit.format)', ''))
             
-            grams = SIZE_TO_GRAMS.get(size_val, 1360)
+            # Fallback: Si esa columna viene vacía, intentamos buscar 'Format' o usamos un default 'Presentation'
+            if not opt2_name or opt2_name.lower() == 'nan':
+                 opt2_name = str(row.get('Format', '')) 
+            if not opt2_name or opt2_name.lower() == 'nan':
+                 opt2_name = 'Presentation' # Default seguro
+
+            # 2. Option2 Value <- Size (product.metafields.pundit.format_size)
+            # Buscamos la columna exacta que indicaste
+            opt2_value = str(row.get('Size (product.metafields.pundit.format_size)', ''))
+            
+            # Fallback: Si esa columna está vacía (ej. archivos de otros proveedores como Signature), buscamos los alternativos
+            if not opt2_value or opt2_value.lower() == 'nan': opt2_value = str(row.get('Option2 Value', ''))
+            if not opt2_value or opt2_value.lower() == 'nan': opt2_value = str(row.get('Sz', ''))
+            if not opt2_value or opt2_value.lower() == 'nan': opt2_value = str(row.get('sz', ''))
+            if not opt2_value or opt2_value.lower() == 'nan': opt2_value = str(row.get('Pack/Sz', ''))
+            if not opt2_value or opt2_value.lower() == 'nan': opt2_value = '750ml' # Último recurso
+
+            # Asignación Final
+            fila['Option2 Name'] = opt2_name
+            fila['Option2 Value'] = opt2_value
+            
+            # Calculamos peso basado en el valor del tamaño
+            grams = SIZE_TO_GRAMS.get(opt2_value, 1360)
             fila['Variant Grams'] = grams
-            
-            weight_lb = round(grams / 453.592, 2)
-            fila['Variant Weight'] = weight_lb
+            fila['Variant Weight'] = round(grams / 453.592, 2)
             fila['Variant Weight Unit'] = 'lb'
             
-            cols_variantes = ['Variant SKU', 'Variant Price', 'Variant Inventory Qty', 
-                            'Image Src', 'Image Alt Text', 'Variant Image', 
-                            'Cost per item', 'Variant Compare At Price', 'Variant Barcode']
-            for c in cols_variantes:
-                fila[c] = row.get(c, '')
+            # Resto de columnas
+            sku_val = str(row.get('Variant SKU', ''))
+            if not sku_val or sku_val == 'nan': sku_val = str(row.get('Item #', ''))
+            
+            price_val = str(row.get('Variant Price', ''))
+            if not price_val or price_val == 'nan': price_val = str(row.get('Reg Price', ''))
+
+            fila['Variant SKU'] = sku_val
+            fila['Variant Price'] = price_val
+            fila['Variant Inventory Qty'] = row.get('Variant Inventory Qty', '')
+            fila['Image Src'] = row.get('Image Src', '')
+            fila['Image Alt Text'] = row.get('Image Alt Text', '')
+            fila['Variant Image'] = row.get('Variant Image', '')
+            fila['Cost per item'] = row.get('Cost per item', '')
+            fila['Variant Compare At Price'] = row.get('Variant Compare At Price', '')
+            
+            barcode_val = str(row.get('Variant Barcode', ''))
+            if not barcode_val or barcode_val.lower() == 'nan': barcode_val = str(row.get('UPC', ''))
+            if not barcode_val or barcode_val.lower() == 'nan': barcode_val = str(row.get('upc', ''))
+            fila['Variant Barcode'] = barcode_val
             
             fila['Variant Inventory Tracker'] = 'shopify'
             rows_finales.append(fila)
@@ -558,7 +580,6 @@ def procesar_agrupacion_inteligente(df):
     }
     
     return df_final, log, pd.DataFrame(lista_redirecciones), metrics
-
 # --- APP ---
 
 def main_app():
