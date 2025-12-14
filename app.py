@@ -213,30 +213,27 @@ def normalizar_region(texto):
 def generar_seo_title(anio, nombrebase, region, score, es_unico=False):
     """
     Genera el Title Tag optimizado.
-    Regla: El Año SOLO se muestra si el producto TIENE variantes.
+    Regla: NUNCA incluye el año.
+    Formato: Sentence case (Solo primera letra mayúscula).
     """
     nombre_limpio = nombrebase.strip()
     
-    # --- LÓGICA CORREGIDA Y SIMPLIFICADA ---
-    if es_unico:
-        anio_str = str(anio) if anio and str(anio).upper() != "NV" else ""
-    else:
-        anio_str = ""  # NO mostrar año en productos con variantes
-    
-    
-    # Construcción Base
-    if anio_str:
-        base_title = f"{anio_str} {nombre_limpio}".strip()
-    else:
-        base_title = nombre_limpio.strip()
+    # --- CAMBIO: ELIMINAMOS EL AÑO ---
+    # Ignoramos la variable 'anio' y 'es_unico'. 
+    # El título base empieza directamente con el nombre del vino.
+    base_title = nombre_limpio
     
     # Componentes Opcionales
     components = []
+    
+    # 1. Region
     if region:
         components.append(str(region))
+    
+    # 2. CTA
     components.append("Best price")
     
-    # Límite de 60 caracteres
+    # Construcción Iterativa (Límite 60 caracteres)
     final_title = base_title
     for comp in components:
         test_title = f"{final_title} {comp}"
@@ -245,16 +242,15 @@ def generar_seo_title(anio, nombrebase, region, score, es_unico=False):
         else:
             continue
             
+    # Fallback si el nombre solo ya es muy largo
     if len(final_title) > 60:
         final_title = final_title[:60]
         last_space = final_title.rfind(' ')
         if last_space != -1:
             final_title = final_title[:last_space]
     
-    # Formato Minúscula (Sentence case)
+    # Formato: Solo primera letra mayúscula (Sentence case)
     return final_title.capitalize()
-
-
 
 def generar_meta_description(row, titulo_limpio, region, varietal, score):
     """
